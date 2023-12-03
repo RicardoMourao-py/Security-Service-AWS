@@ -27,8 +27,10 @@ resource "aws_route_table" "route_table_public" {
 
   route {
     cidr_block = "0.0.0.0/0"
-    gateway_id = aws_internet_gateway.ig_public.id  # Certifique-se de criar o recurso do Internet Gateway (exemplo abaixo)
+    gateway_id = aws_internet_gateway.ig_public.id 
   }
+
+  depends_on = [ aws_internet_gateway.ig_public ]
 }
 
 resource "aws_route_table_association" "association_public" {
@@ -45,8 +47,10 @@ resource "aws_route_table" "route_table_private" {
 
   route {
     cidr_block = "0.0.0.0/0"
-    nat_gateway_id = aws_nat_gateway.ng_private.id  # Certifique-se de criar o recurso do NAT Gateway (exemplo abaixo)
+    nat_gateway_id = aws_nat_gateway.ng_private.id  
   }
+
+  depends_on = [ aws_nat_gateway.ng_private ]
 }
 
 resource "aws_route_table_association" "association_private" {
@@ -57,4 +61,181 @@ resource "aws_route_table_association" "association_private" {
 resource "aws_nat_gateway" "ng_private" {
   connectivity_type = "private"
   subnet_id         = aws_subnet.subnet_private.id
+}
+
+################################################# Cria Instancias ###################################################
+
+# Instancia Jump Server
+resource "aws_security_group" "jump_server_sg" {
+  vpc_id = aws_vpc.example.id
+
+  ingress {
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+resource "aws_instance" "jump_server_instance" {
+  ami           = "ami-0fc5d935ebf8bc3bc"  # Ubuntu 22.04 LTS
+  instance_type = "t2.micro"
+  key_name      = "jumpserver-keypar"  # Substitua pelo nome da sua chave
+
+  vpc_security_group_ids = [aws_security_group.jump_server_sg.id]
+
+  subnet_id = aws_subnet.subnet_public.id
+}
+
+# Instancia Web Server
+resource "aws_security_group" "web_server_sg" {
+    vpc_id = aws_vpc.example.id
+    ingress {
+        from_port   = 10050
+        to_port     = 10050
+        protocol    = "tcp"
+        cidr_blocks = [aws_instance.zabbix_instance.private_ip]
+    }
+
+    ingress {
+        from_port   = 3306
+        to_port     = 3306
+        protocol    = "tcp"
+        cidr_blocks = [aws_instance.database_instance.private_ip]
+    }
+
+    ingress {
+        from_port   = 22
+        to_port     = 22
+        protocol    = "tcp"
+        cidr_blocks = [aws_instance.jump_server_instance.private_ip]
+    }
+
+    ingress {
+        from_port   = 80
+        to_port     = 80
+        protocol    = "tcp"
+        cidr_blocks = ["0.0.0.0/0"]
+    }
+
+    egress {
+        from_port   = 0
+        to_port     = 0
+        protocol    = "-1"
+        cidr_blocks = ["0.0.0.0/0"]
+    }
+
+    depends_on = [ aws_instance.database_instance, aws_instance.zabbix_instance ]
+}
+
+resource "aws_instance" "web_server_instance" {
+  ami           = "ami-0fc5d935ebf8bc3bc"  # Ubuntu 22.04 LTS
+  instance_type = "t2.micro"
+  key_name      = "jumpserver-keypar"  # Substitua pelo nome da sua chave
+
+  vpc_security_group_ids = [aws_security_group.web_server_sg.id]
+
+  subnet_id = aws_subnet.subnet_public.id
+}
+
+# Instancia Database
+resource "aws_security_group" "database_sg" {
+    vpc_id = aws_vpc.example.id
+    ingress {
+        from_port   = 10050
+        to_port     = 10050
+        protocol    = "tcp"
+        cidr_blocks = [aws_instance.zabbix_instance.private_ip]
+    }
+
+    ingress {
+        from_port   = 3306
+        to_port     = 3306
+        protocol    = "tcp"
+        cidr_blocks = [aws_instance.web_server_instance.private_ip]
+    }
+
+    ingress {
+        from_port   = 22
+        to_port     = 22
+        protocol    = "tcp"
+        cidr_blocks = [aws_instance.jump_server_instance.private_ip]
+    }
+
+    egress {
+        from_port   = 0
+        to_port     = 0
+        protocol    = "-1"
+        cidr_blocks = ["0.0.0.0/0"]
+    }
+
+    depends_on = [ aws_instance.web_server_instance, aws_instance.zabbix_instance ]
+}
+
+resource "aws_instance" "web_server_instance" {
+  ami           = "ami-0fc5d935ebf8bc3bc"  # Ubuntu 22.04 LTS
+  instance_type = "t2.micro"
+  key_name      = "jumpserver-keypar"  # Substitua pelo nome da sua chave
+
+  vpc_security_group_ids = [aws_security_group.database_sg.id]
+
+  subnet_id = aws_subnet.subnet_private.id
+}
+
+# Instancia Zabbix
+resource "aws_security_group" "zabbix_sg" {
+    vpc_id = aws_vpc.example.id
+    ingress {
+        from_port   = 10050
+        to_port     = 10050
+        protocol    = "tcp"
+        cidr_blocks = [aws_instance.database_instance.private_ip]
+    }
+
+    ingress {
+        from_port   = 10050
+        to_port     = 10050
+        protocol    = "tcp"
+        cidr_blocks = [aws_instance.web_server_instance.private_ip]
+    }
+
+    ingress {
+        from_port   = 22
+        to_port     = 22
+        protocol    = "tcp"
+        cidr_blocks = [aws_instance.jump_server_instance.private_ip]
+    }
+
+    ingress {
+        from_port   = 80
+        to_port     = 80
+        protocol    = "tcp"
+        cidr_blocks = ["0.0.0.0/0"]
+    }
+
+    egress {
+        from_port   = 0
+        to_port     = 0
+        protocol    = "-1"
+        cidr_blocks = ["0.0.0.0/0"]
+    }
+
+    depends_on = [ aws_instance.database_instance, aws_instance.web_server_instance ]
+}
+
+resource "aws_instance" "zabbix_instance" {
+  ami           = "ami-0fc5d935ebf8bc3bc"  # Ubuntu 22.04 LTS
+  instance_type = "t2.medium"
+  key_name      = "jumpserver-keypar"  # Substitua pelo nome da sua chave
+
+  vpc_security_group_ids = [aws_security_group.zabbix_sg.id]
+
+  subnet_id = aws_subnet.subnet_public.id
 }
